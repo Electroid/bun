@@ -34,36 +34,41 @@ jobs:
 
     steps:
       - id: checkout
+        name: Checkout
         uses: actions/checkout@v3
         with:
           submodules: recursive
 
       - id: qemu
+        name: Setup QEMU
         if: ${{ matrix.build-arch == 'arm64' }}
         uses: docker/setup-qemu-action@v2
         with:
-          platforms: ${{ matrix.build-arch }}
+          platforms: linux/${{ matrix.build-arch }}
 
       - id: buildx
+        name: Setup Buildx
         uses: docker/setup-buildx-action@v2
         with:
           platforms: linux/${{ matrix.build-arch }}
           install: true # aliases `docker build` to `docker buildx`
 
       - id: setup
+        name: Setup
         run: |
           rm -rf ${{ runner.temp }}/release
           mkdir -p /tmp/.buildx-cache-${{ matrix.tag }}
 
       - id: build
-        uses: docker/build-push-action@v3
+        name: Build
+        uses: docker/build-push-action@v4
         with:
           push: false
           context: .
           target: artifact
           platforms: linux/${{ matrix.build-arch }}
-          cache-from: type=local,src=/tmp/.buildx-cache-${{ matrix.tag }}
-          cache-to: type=local,dest=/tmp/.buildx-cache-${{ matrix.tag }}
+          cache-from: type=gha,type=max,ignore-error=true
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,type=max,ignore-error=true' || '' }}
           outputs: type=local,dest=${{ runner.temp }}/release
           build-args: |
             GIT_SHA=${{ github.sha }}  
@@ -74,56 +79,43 @@ jobs:
             WEBKIT_URL=${{ matrix.webkit-url }}
             WEBKIT_BASENAME=${{ matrix.webkit-basename }}
 
-      - id: Zip
+      - id: cleanup
+        name: Cleanup
         run: |
-          # if zip is not found
-          if [ ! -x "$(command -v zip)" ]; then
-            sudo apt-get update && sudo apt-get install -y zip --no-install-recommends
-          fi
-
+          cd ${{ runner.temp }}/release
+          chmod +x bun-profile bun
+          mkdir bun-${{ matrix.tag }}-profile
+          mkdir bun-${{ matrix.tag }}
           if [ ! -x "$(command -v strip)" ]; then
             sudo apt-get update && sudo apt-get install -y binutils --no-install-recommends
           fi
-
-          cd ${{runner.temp}}/release
-          chmod +x bun-profile bun
-
-          mkdir bun-${{matrix.tag}}-profile
-          mkdir bun-${{matrix.tag}}
-
           strip bun
+          mv bun-profile bun-${{ matrix.tag }}-profile/bun-profile
+          mv bun bun-${{ matrix.tag }}/bun
+          if [ ! -x "$(command -v zip)" ]; then
+            sudo apt-get update && sudo apt-get install -y zip --no-install-recommends
+          fi
+          zip -r bun-${{ matrix.tag }}-profile.zip bun-${{ matrix.tag }}-profile
+          zip -r bun-${{ matrix.tag }}.zip bun-${{ matrix.tag }}
 
-          mv bun-profile bun-${{matrix.tag}}-profile/bun-profile
-          mv bun bun-${{matrix.tag}}/bun
-
-          zip -r bun-${{matrix.tag}}-profile.zip bun-${{matrix.tag}}-profile
-          zip -r bun-${{matrix.tag}}.zip bun-${{matrix.tag}}
-
-      - uses: actions/upload-artifact@v3
+      - id: upload
+        name: Upload bun-${{ matrix.tag }}
+        uses: actions/upload-artifact@v3
         with:
-          name: bun-${{matrix.tag}}-profile
-          path: ${{runner.temp}}/release/bun-${{matrix.tag}}-profile.zip
+          name: bun-${{ matrix.tag}}
+          path: ${{ runner.temp }}/release/bun-${{ matrix.tag }}.zip
 
-      - uses: actions/upload-artifact@v3
+      - id: upload-profile
+        name: Upload bun-${{ matrix.tag }}-profile
+        uses: actions/upload-artifact@v3
         with:
-          name: bun-${{matrix.tag}}
-          path: ${{runner.temp}}/release/bun-${{matrix.tag}}.zip
+          name: bun-${{ matrix.tag }}-profile
+          path: ${{ runner.temp }}/release/bun-${{ matrix.tag }}-profile.zip
 
-      - uses: actions/upload-artifact@v3
-        with:
-          name: bun-obj-${{matrix.tag}}
-          path: ${{runner.temp}}/release/bun-obj
-
-      - uses: actions/upload-artifact@v3
-        with:
-          name: ${{matrix.tag}}-dependencies
-          path: ${{runner.temp}}/release/bun-dependencies
-
-      - name: Release
-        id: release
+      - id: release
+        name: Release
+        if: github.repository_owner == 'oven-sh' && github.ref == 'refs/heads/main'
         uses: ncipollo/release-action@v1
-        if: |
-          github.repository_owner == 'oven-sh' && github.ref == 'refs/heads/main'
         with:
           prerelease: true
           body: "This canary release of Bun corresponds to the commit [${{ github.sha }}]"

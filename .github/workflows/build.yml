@@ -16,13 +16,352 @@ on:
     branches:
       - main
 
+env:
+  WEBKIT_TAG: may20
+
 jobs:
-  linux:
-    name: ${{ matrix.tag }}
-    runs-on: ${{ matrix.runner }}
+  darwin-obj:
+    name: Compile bun-${{ matrix.tag }}-obj
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: darwin-aarch64
+            arch: aarch64
+            cpu: native
+          - tag: darwin-x64
+            arch: x86_64
+            cpu: haswell
+          - tag: darwin-x64-baseline
+            arch: x86_64
+            cpu: nehalem
+
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - id: buildx
+        name: Setup Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          platforms: linux/${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+          install: true
+
+      - id: build
+        name: Build
+        uses: docker/build-push-action@v4
+        with:
+          push: false
+          context: .
+          target: build_release_obj
+          platforms: linux/${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+          cache-from: type=gha,mode=max,ignore-error=true
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,ignore-error=true' || '' }}
+          outputs: type=local,dest=${{ runner.temp }}/release
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            TRIPLET=${{ matrix.arch }}-macos-none
+            ARCH=${{ matrix.arch }}
+            CPU_TARGET=${{ matrix.cpu }}
+            BUILDARCH=${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+            BUILD_MACHINE_ARCH=${{ runner.arch == 'ARM64' && 'aarch64' || 'x86_64' }}
+
+      - id: upload
+        name: Upload bun-${{ matrix.tag }}-obj
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ matrix.tag }}-obj
+          path: ${{ runner.temp }}/release/bun.o
+
+  darwin-cpp:
+    name: Compile bun-${{ matrix.tag }}-${{ matrix.deps && !matrix.cpp && 'deps' || matrix.cpp && 'deps+cpp' || 'cpp' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: darwin-aarch64
+            arch: aarch64
+            cpu: native
+            build-arch: arm64
+            deps: true
+            cpp: true
+          - tag: darwin-x64
+            arch: x86_64
+            cpu: haswell
+            build-arch: amd64
+            deps: true
+            cpp: false
+          - tag: darwin-x64
+            arch: x86_64
+            cpu: haswell
+            build-arch: amd64
+            deps: false
+            cpp: true
+          - tag: darwin-x64-baseline
+            arch: x86_64
+            cpu: nehalem
+            build-arch: amd64
+            deps: true
+            cpp: false
+          - tag: darwin-x64-baseline
+            arch: x86_64
+            cpu: nehalem 
+            build-arch: amd64
+            deps: false
+            cpp: true
+
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - id: brew
+        name: Setup Brew
+        env:
+          CPU_TARGET: ${{ matrix.cpu }}
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          JSC_LIB: ${{ runner.temp }}/bun-webkit/lib
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+          BUN_DEPLOY_DIR: ${{ runner.temp }}/release/bun
+          OBJ_DIR: ${{ runner.temp }}/bun-cpp-obj
+          BUN_DEPS_OUT_DIR: ${{ runner.temp }}/bun-deps
+        run: |
+          brew install ccache rust llvm@15 pkg-config coreutils libtool cmake libiconv automake openssl@1.1 ninja gnu-sed pkg-config esbuild --force
+          echo "export PATH=$(brew --prefix ccache)/bin:\$PATH" >> $GITHUB_ENV
+          echo "export PATH=$(brew --prefix coreutils)/libexec/gnubin:\$PATH" >> $GITHUB_ENV
+          echo "export PATH=$(brew --prefix llvm@15)/bin:\$PATH" >> $GITHUB_ENV
+          brew link --overwrite llvm@15
+
+      - id: ccache-deps
+        name: Ccache Dependencies
+        uses: hendrikmuhs/ccache-action@v1.2
+        if: ${{ matrix.deps }}
+        with:
+          key: ${{ runner.os }}-ccache-${{ matrix.tag }}-deps
+          restore-keys: ${{ runner.os }}-ccache-${{ matrix.tag }}-deps
+
+      - id: ccache-cpp
+        name: Ccache C++
+        uses: hendrikmuhs/ccache-action@v1.2
+        if: ${{ matrix.cpp }}
+        with:
+          key: ${{ runner.os }}-ccache-${{ matrix.tag }}-obj
+          restore-keys: ${{ runner.os }}-ccache-${{ matrix.tag }}-obj
+
+      - id: webkit
+        name: Download WebKit
+        if: ${{ matrix.cpp }}
+        env:
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          WEBKIT_URL: "https://github.com/oven-sh/WebKit/releases/download/${{ env.WEBKIT_TAG }}/bun-webkit-macos-${{ matrix.build-arch }}-lto.tar.gz"
+        run: |
+          rm -rf $JSC_BASE_DIR
+          mkdir -p $JSC_BASE_DIR
+          curl -L $WEBKIT_URL | tar -xz -C $JSC_BASE_DIR --strip-components=1
+
+      - id: compile-deps
+        name: Compile Dependencies
+        if: ${{ matrix.deps }}
+        env:
+          CPU_TARGET: ${{ matrix.cpu }}
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          JSC_LIB: ${{ runner.temp }}/bun-webkit/lib
+          BUN_DEPLOY_DIR: ${{ runner.temp }}/release/bun
+          OBJ_DIR: ${{ runner.temp }}/bun-cpp-obj
+          BUN_DEPS_OUT_DIR: ${{runner.temp }}/bun-deps
+          WEBKIT_RELEASE_DIR: ${{ runner.temp }}/bun-webkit
+          WEBKIT_RELEASE_DIR_LTO: ${{ runner.temp }}/bun-webkit
+        run: |
+          mkdir -p $OBJ_DIR $BUN_DEPS_OUT_DIR
+          make vendor-without-check
+
+      - id: compile-cpp
+        name: Compile C++
+        if: ${{ matrix.cpp }}
+        env:
+          CPU_TARGET: ${{ matrix.cpu }}
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          JSC_LIB: ${{ runner.temp }}/bun-webkit/lib
+          BUN_DEPLOY_DIR: ${{ runner.temp }}/release/bun
+          OBJ_DIR: ${{ runner.temp }}/bun-cpp-obj
+          BUN_DEPS_OUT_DIR: ${{runner.temp}}/bun-deps
+          WEBKIT_RELEASE_DIR: ${{ runner.temp }}/bun-webkit
+          WEBKIT_RELEASE_DIR_LTO: ${{ runner.temp }}/bun-webkit
+        run: |
+          mkdir -p $OBJ_DIR $BUN_DEPS_OUT_DIR
+          make -j $(sysctl -n hw.ncpu) release-bindings
+
+      - id: upload-cpp
+        name: Upload C++
+        if: ${{ matrix.cpp }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ matrix.tag }}-cpp
+          path: ${{ runner.temp }}/bun-cpp-obj
+
+      - id: upload-deps
+        name: Upload Dependencies
+        if: ${{ matrix.deps }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ matrix.tag }}-deps
+          path: ${{ runner.temp }}/bun-deps
+
+  darwin:
+    name: Build bun-${{ matrix.tag }}
+    needs: [darwin-cpp, darwin-obj]
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: darwin-aarch64
+            arch: aarch64
+            cpu: native
+            build-arch: arm64
+          - tag: darwin-x64
+            arch: x86_64
+            cpu: haswell
+            build-arch: amd64
+          - tag: darwin-x64-baseline
+            arch: x86_64
+            cpu: nehalem
+            build-arch: amd64
+
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - id: brew
+        name: Setup Brew
+        env:
+          CPU_TARGET: ${{ matrix.cpu }}
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          JSC_LIB: ${{ runner.temp }}/bun-webkit/lib
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+          BUN_DEPLOY_DIR: ${{ runner.temp }}/release/bun
+          OBJ_DIR: ${{ runner.temp }}/bun-cpp-obj
+          BUN_DEPS_OUT_DIR: ${{ runner.temp }}/bun-deps
+        run: |
+          brew install ccache rust llvm@15 pkg-config coreutils libtool cmake libiconv automake openssl@1.1 ninja gnu-sed pkg-config esbuild --force
+          echo "export PATH=$(brew --prefix ccache)/bin:\$PATH" >> $GITHUB_ENV
+          echo "export PATH=$(brew --prefix coreutils)/libexec/gnubin:\$PATH" >> $GITHUB_ENV
+          echo "export PATH=$(brew --prefix llvm@15)/bin:\$PATH" >> $GITHUB_ENV
+          brew link --overwrite llvm@15
+
+      - id: webkit
+        name: Download WebKit
+        env:
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          WEBKIT_URL: "https://github.com/oven-sh/WebKit/releases/download/${{ env.WEBKIT_TAG }}/bun-webkit-macos-${{ matrix.build-arch }}-lto.tar.gz"
+        run: |
+          rm -rf $JSC_BASE_DIR
+          mkdir -p $JSC_BASE_DIR
+          curl -L $WEBKIT_URL | tar -xz -C $JSC_BASE_DIR --strip-components=1
+
+      - id: download-cpp
+        name: Download C++
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ matrix.tag }}-cpp
+          path: ${{ runner.temp }}/bun-cpp-obj
+
+      - id: download-deps
+        name: Download Dependencies
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ matrix.tag }}-deps
+          path: ${{ runner.temp }}/bun-deps
+
+      - id: download-obj
+        name: Download Object
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ matrix.obj }}
+          path: ${{ runner.temp }}/release
+
+      - id: ccache
+        name: Ccache (link)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ matrix.tag }}-link
+          restore-keys: ${{ runner.os }}-ccache-${{ matrix.tag }}-link
+
+      - id: build
+        name: Build
+        env:
+          CPU_TARGET: ${{ matrix.cpu }}
+          JSC_BASE_DIR: ${{ runner.temp }}/bun-webkit
+          JSC_LIB: ${{ runner.temp }}/bun-webkit/lib
+          BUN_DEPLOY_DIR: ${{ runner.temp }}/release/bun
+          OBJ_DIR: ${{ runner.temp }}/bun-cpp-obj
+          BUN_DEPS_OUT_DIR: ${{ runner.temp }}/bun-deps
+          BUN_RELEASE_DIR: ${{ runner.temp }}/release
+          WEBKIT_RELEASE_DIR: ${{ runner.temp }}/bun-webkit
+          WEBKIT_RELEASE_DIR_LTO: ${{ runner.temp }}/bun-webkit
+        run: |
+          rm -rf packages/bun-${{ matrix.tag }}
+          mkdir -p packages/bun-${{ matrix.tag }}
+          mv ${{ runner.temp }}/release/* packages/bun-${{ matrix.tag }}/
+          make bun-link-lld-release copy-to-bun-release-dir-bin
+
+      - id: prepare
+        name: Prepare
+        run: |
+          cd ${{ runner.temp }}/release
+          chmod +x bun-profile bun
+          mkdir bun-${{ matrix.tag }}-profile
+          mkdir bun-${{ matrix.tag }}
+
+          /usr/bin/strip -S bun
+
+          mv bun-profile bun-${{ matrix.tag }}-profile/bun-profile
+          mv bun bun-${{ matrix.tag }}/bun
+
+          zip -r bun-${{ matrix.tag }}-profile.zip bun-${{ matrix.tag}}-profile
+          zip -r bun-${{ matrix.tag }}.zip bun-${{ matrix.tag }}
+
+      - id: upload
+        name: Upload bun-${{ matrix.tag }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ matrix.tag }}
+          path: ${{ runner.temp }}/release/bun-${{ matrix.tag }}.zip
+
+      - id: upload-profile
+        name: Upload bun-${{ matrix.tag }}-profile
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ matrix.tag }}-profile
+          path: ${{ runner.temp }}/release/bun-${{ matrix.tag }}-profile.zip
+
+  linux:
+    name: Build bun-${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
       matrix:
         include:
           - tag: linux-aarch64
@@ -30,19 +369,16 @@ jobs:
             cpu: native
             build-arch: arm64
             build-machine-arch: aarch64
-            runner: ubuntu-latest
           - tag: linux-x64
             arch: x86_64
             cpu: haswell
             build-arch: amd64
             build-machine-arch: x86_64
-            runner: ubuntu-latest
           - tag: linux-x64-baseline
             arch: x86_64  
             cpu: nehalem
             build-arch: amd64
             build-machine-arch: x86_64
-            runner: ubuntu-latest
 
     steps:
       - id: checkout
@@ -53,7 +389,7 @@ jobs:
 
       - id: qemu
         name: Setup QEMU
-        if: ${{ matrix.build-arch == 'arm64' }}
+        if: ${{ !contains(runner.arch, matrix.build-arch) }}
         uses: docker/setup-qemu-action@v2
         with:
           platforms: linux/${{ matrix.build-arch }}
@@ -63,7 +399,7 @@ jobs:
         uses: docker/setup-buildx-action@v2
         with:
           platforms: linux/${{ matrix.build-arch }}
-          install: true # aliases `docker build` to `docker buildx`
+          install: true
 
       - id: build
         name: Build
@@ -116,18 +452,16 @@ jobs:
           name: bun-${{ matrix.tag }}-profile
           path: ${{ runner.temp }}/release/bun-${{ matrix.tag }}-profile.zip
 
-      - id: release
-        name: Release
-        if: github.repository_owner == 'oven-sh' && github.ref == 'refs/heads/main'
-        uses: ncipollo/release-action@v1
+      - id: upload-obj
+        name: Upload bun-${{ matrix.tag }}-obj
+        uses: actions/upload-artifact@v3
         with:
-          prerelease: true
-          body: "This canary release of Bun corresponds to the commit [${{ github.sha }}]"
-          allowUpdates: true
-          replacesArtifacts: true
-          generateReleaseNotes: true
-          artifactErrorsFailBuild: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: "Canary (${{github.sha}})"
-          tag: "canary"
-          artifacts: "${{runner.temp}}/release/bun-${{matrix.tag}}.zip,${{runner.temp}}/release/bun-${{matrix.tag}}-profile.zip"
+          name: bun-${{ matrix.tag }}-obj
+          path: ${{ runner.temp }}/release/bun-obj
+
+      - id: upload-deps
+        name: Upload bun-${{ matrix.tag }}-deps
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ matrix.tag }}-deps
+          path: ${{ runner.temp }}/release/bun-dependencies

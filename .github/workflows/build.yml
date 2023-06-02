@@ -53,12 +53,6 @@ jobs:
           platforms: linux/${{ matrix.build-arch }}
           install: true # aliases `docker build` to `docker buildx`
 
-      - id: setup
-        name: Setup
-        run: |
-          rm -rf ${{ runner.temp }}/release
-          mkdir -p /tmp/.buildx-cache-${{ matrix.tag }}
-
       - id: build
         name: Build
         uses: docker/build-push-action@v4
@@ -67,8 +61,8 @@ jobs:
           context: .
           target: artifact
           platforms: linux/${{ matrix.build-arch }}
-          cache-from: type=gha,type=max,ignore-error=true
-          cache-to: ${{ github.event_name == 'push' && 'type=gha,type=max,ignore-error=true' || '' }}
+          cache-from: type=gha,mode=max,ignore-error=true
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,ignore-error=true' || '' }}
           outputs: type=local,dest=${{ runner.temp }}/release
           build-args: |
             GIT_SHA=${{ github.sha }}  
@@ -79,8 +73,8 @@ jobs:
             WEBKIT_URL=${{ matrix.webkit-url }}
             WEBKIT_BASENAME=${{ matrix.webkit-basename }}
 
-      - id: cleanup
-        name: Cleanup
+      - id: prepare
+        name: Prepare
         run: |
           cd ${{ runner.temp }}/release
           chmod +x bun-profile bun

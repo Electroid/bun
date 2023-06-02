@@ -21,7 +21,7 @@ env:
 
 jobs:
   darwin-obj:
-    name: Compile bun-${{ matrix.tag }}-obj
+    name: bun-${{ matrix.tag }}-obj
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -80,7 +80,7 @@ jobs:
           path: ${{ runner.temp }}/release/bun.o
 
   darwin-cpp:
-    name: Compile bun-${{ matrix.tag }}-${{ matrix.deps && !matrix.cpp && 'deps' || matrix.cpp && 'deps+cpp' || 'cpp' }}
+    name: bun-${{ matrix.tag }}-${{ matrix.deps && !matrix.cpp && 'deps' || matrix.cpp && 'deps+cpp' || 'cpp' }}
     runs-on: macos-latest
     timeout-minutes: 60
 
@@ -221,7 +221,7 @@ jobs:
           path: ${{ runner.temp }}/bun-deps
 
   darwin:
-    name: Build bun-${{ matrix.tag }}
+    name: bun-${{ matrix.tag }}
     needs: [darwin-cpp, darwin-obj]
     runs-on: macos-latest
     timeout-minutes: 60
@@ -356,7 +356,7 @@ jobs:
           path: ${{ runner.temp }}/release/bun-${{ matrix.tag }}-profile.zip
 
   linux:
-    name: Build bun-${{ matrix.tag }}
+    name: bun-${{ matrix.tag }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 

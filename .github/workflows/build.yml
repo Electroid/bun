@@ -20,15 +20,28 @@ jobs:
   linux:
     name: ${{ matrix.tag }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
 
     strategy:
       matrix:
         include:
           - tag: linux-aarch64
             arch: aarch64
+            cpu: native
             build-arch: arm64
             build-machine-arch: aarch64
-            cpu: native
+            runner: ubuntu-latest
+          - tag: linux-x64
+            arch: x86_64
+            cpu: haswell
+            build-arch: amd64
+            build-machine-arch: x86_64
+            runner: ubuntu-latest
+          - tag: linux-x64-baseline
+            arch: x86_64  
+            cpu: nehalem
+            build-arch: amd64
+            build-machine-arch: x86_64
             runner: ubuntu-latest
 
     steps:
@@ -66,9 +79,9 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}  
             ARCH=${{ matrix.arch }}
+            CPU_TARGET=${{ matrix.cpu }}
             BUILDARCH=${{ matrix.build-arch }}
             BUILD_MACHINE_ARCH=${{ matrix.build-machine-arch }}
-            CPU_TARGET=${{ matrix.cpu }}
 
       - id: prepare
         name: Prepare

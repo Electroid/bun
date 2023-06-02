@@ -1,83 +1,80 @@
-name: bun-linux
+name: Build
+
+permissions:
+  contents: read
 
 concurrency:
-  group: bun-linux-aarch64-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  TEST_TAG: bun-test'
 
 on:
   push:
     branches:
       - main
-    paths:
-      - "src/**/*"
-      - "test/**/*"
-      - "build.zig"
-      - "Makefile"
-      - "Dockerfile"
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
 
 jobs:
   linux:
-    name: ${{matrix.tag}}
-    runs-on: ${{matrix.runner}}
-    if: github.repository_owner == 'oven-sh'
-    timeout-minutes: 90
+    name: ${{ matrix.tag }}
+    runs-on: ${{ matrix.runner }}
+
     strategy:
       matrix:
         include:
-          - cpu: native
-            tag: linux-aarch64
+          - tag: linux-aarch64
             arch: aarch64
-            build_arch: arm64
-            runner: linux-arm64
-            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/may20/bun-webkit-linux-arm64-lto.tar.gz"
-            webkit_basename: "bun-webkit-linux-arm64-lto"
-            build_machine_arch: aarch64
+            build-arch: arm64
+            build-machine-arch: aarch64
+            cpu: native
+            webkit-url: "https://github.com/oven-sh/WebKit/releases/download/may20/bun-webkit-linux-arm64-lto.tar.gz"
+            webkit-basename: "bun-webkit-linux-arm64-lto"
+            runner: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - id: checkout
+        uses: actions/checkout@v3
         with:
           submodules: recursive
-      - uses: docker/setup-buildx-action@v2
-        id: buildx
+
+      - id: qemu
+        if: ${{ matrix.build-arch == 'arm64' }}
+        uses: docker/setup-qemu-action@v2
         with:
-          install: true
-      - name: Run
+          platforms: ${{ matrix.build-arch }}
+
+      - id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          platforms: linux/${{ matrix.build-arch }}
+          install: true # aliases `docker build` to `docker buildx`
+
+      - id: setup
         run: |
-          rm -rf ${{runner.temp}}/release
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - run: |
-          mkdir -p /tmp/.buildx-cache-${{matrix.tag}}
-      - name: Build and push
+          rm -rf ${{ runner.temp }}/release
+          mkdir -p /tmp/.buildx-cache-${{ matrix.tag }}
+
+      - id: build
         uses: docker/build-push-action@v3
         with:
-          context: .
           push: false
-          cache-from: type=local,src=/tmp/.buildx-cache-${{matrix.tag}}
-          cache-to: type=local,dest=/tmp/.buildx-cache-${{matrix.tag}}
-          build-args: |
-            ARCH=${{matrix.arch}}
-            BUILDARCH=${{matrix.build_arch}}
-            BUILD_MACHINE_ARCH=${{matrix.build_machine_arch}}
-            CPU_TARGET=${{matrix.cpu}}
-            WEBKIT_URL=${{matrix.webkit_url}}
-            GIT_SHA=${{github.sha}}
-            WEBKIT_BASENAME=${{matrix.webkit_basename}}
-          platforms: linux/${{matrix.build_arch}}
+          context: .
           target: artifact
-          outputs: type=local,dest=${{runner.temp}}/release
-      - name: Zip
+          platforms: linux/${{ matrix.build-arch }}
+          cache-from: type=local,src=/tmp/.buildx-cache-${{ matrix.tag }}
+          cache-to: type=local,dest=/tmp/.buildx-cache-${{ matrix.tag }}
+          outputs: type=local,dest=${{ runner.temp }}/release
+          build-args: |
+            GIT_SHA=${{ github.sha }}  
+            ARCH=${{ matrix.arch }}
+            BUILDARCH=${{ matrix.build-arch }}
+            BUILD_MACHINE_ARCH=${{ matrix.build-machine-arch }}
+            CPU_TARGET=${{ matrix.cpu }}
+            WEBKIT_URL=${{ matrix.webkit-url }}
+            WEBKIT_BASENAME=${{ matrix.webkit-basename }}
+
+      - id: Zip
         run: |
           # if zip is not found
           if [ ! -x "$(command -v zip)" ]; then
@@ -101,28 +98,32 @@ jobs:
 
           zip -r bun-${{matrix.tag}}-profile.zip bun-${{matrix.tag}}-profile
           zip -r bun-${{matrix.tag}}.zip bun-${{matrix.tag}}
+
       - uses: actions/upload-artifact@v3
         with:
           name: bun-${{matrix.tag}}-profile
           path: ${{runner.temp}}/release/bun-${{matrix.tag}}-profile.zip
+
       - uses: actions/upload-artifact@v3
         with:
           name: bun-${{matrix.tag}}
           path: ${{runner.temp}}/release/bun-${{matrix.tag}}.zip
+
       - uses: actions/upload-artifact@v3
         with:
           name: bun-obj-${{matrix.tag}}
           path: ${{runner.temp}}/release/bun-obj
+
       - uses: actions/upload-artifact@v3
         with:
           name: ${{matrix.tag}}-dependencies
           path: ${{runner.temp}}/release/bun-dependencies
+
       - name: Release
         id: release
         uses: ncipollo/release-action@v1
         if: |
-          github.repository_owner == 'oven-sh'
-          && github.ref == 'refs/heads/main'
+          github.repository_owner == 'oven-sh' && github.ref == 'refs/heads/main'
         with:
           prerelease: true
           body: "This canary release of Bun corresponds to the commit [${{ github.sha }}]"

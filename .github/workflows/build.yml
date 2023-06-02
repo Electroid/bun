@@ -28,8 +28,6 @@ jobs:
             build-arch: arm64
             build-machine-arch: aarch64
             cpu: native
-            webkit-url: "https://github.com/oven-sh/WebKit/releases/download/may20/bun-webkit-linux-arm64-lto.tar.gz"
-            webkit-basename: "bun-webkit-linux-arm64-lto"
             runner: ubuntu-latest
 
     steps:
@@ -70,8 +68,6 @@ jobs:
             BUILDARCH=${{ matrix.build-arch }}
             BUILD_MACHINE_ARCH=${{ matrix.build-machine-arch }}
             CPU_TARGET=${{ matrix.cpu }}
-            WEBKIT_URL=${{ matrix.webkit-url }}
-            WEBKIT_BASENAME=${{ matrix.webkit-basename }}
 
       - id: prepare
         name: Prepare

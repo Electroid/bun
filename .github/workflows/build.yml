@@ -80,7 +80,7 @@ jobs:
           path: ${{ runner.temp }}/release/bun.o
 
   darwin-cpp:
-    name: bun-${{ matrix.tag }}-${{ matrix.deps && !matrix.cpp && 'deps' || matrix.cpp && 'deps+cpp' || 'cpp' }}
+    name: bun-${{ matrix.tag }}-${{ matrix.deps && !matrix.cpp && 'deps' || !matrix.deps && matrix.cpp && 'cpp' || 'deps+cpp' }}
     runs-on: macos-latest
     timeout-minutes: 60
 

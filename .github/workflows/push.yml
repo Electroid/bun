@@ -1,0 +1,20 @@
+name: Push
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+on: [push]
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      tag: linux-x64
+      arch: x86_64
+      cpu: haswell
+      build-arch: amd64
+      build-machine-arch: x86_64

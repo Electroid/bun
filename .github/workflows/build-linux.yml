@@ -1,0 +1,163 @@
+name: Build Linux
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+        description: e.g. linux-aarch64, darwin-x64-baseline
+      arch:
+        required: true
+        type: string
+        description: e.g. x86_64, aarch64
+      cpu:
+        required: true
+        type: string
+        description: e.g. haswell, native
+      build-arch:
+        required: true
+        type: string
+        description: e.g. amd64, arm64
+      build-machine-arch:
+        required: true
+        type: string
+        description: e.g. x86_64, aarch64
+      runner:
+        required: false
+        type: string
+        description: e.g. ubuntu-latest
+        default: ubuntu-latest
+      read-cache:
+        required: false
+        type: boolean
+        description: If cache should be read?
+        default: true
+      write-cache:
+        required: false
+        type: boolean
+        description: If cache should be written?
+        default: false
+      timeout:
+        required: false
+        type: number
+        description: How many minutes until timeout?
+        default: 60
+
+jobs:
+  build:
+    name: Build ${{ inputs.tag }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout }}
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - id: qemu
+        name: Setup QEMU
+        if: ${{ !contains(runner.arch, inputs.build-arch) }}
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/${{ inputs.build-arch }}
+
+      - id: buildx
+        name: Setup Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          platforms: linux/${{ inputs.build-arch }}
+          install: true
+
+      - id: build
+        name: Build
+        uses: docker/build-push-action@v4
+        with:
+          push: false
+          context: .
+          target: artifact
+          platforms: linux/${{ inputs.build-arch }}
+          cache-from: ${{ inputs.read-cache && 'type=gha,mode=max,ignore-error=true' || '' }}
+          cache-to: ${{ inputs.write-cache && 'type=gha,mode=max,ignore-error=true' || '' }}
+          outputs: type=local,dest=${{ runner.temp }}/release
+          build-args: |
+            GIT_SHA=${{ github.sha }}  
+            ARCH=${{ inputs.arch }}
+            CPU_TARGET=${{ inputs.cpu }}
+            BUILDARCH=${{ inputs.build-arch }}
+            BUILD_MACHINE_ARCH=${{ inputs.build-machine-arch }}
+
+      - id: prepare
+        name: Prepare
+        run: |
+          cd ${{ runner.temp }}/release
+          chmod +x bun-profile bun
+          mkdir bun-${{ inputs.tag }}-profile
+          mkdir bun-${{ inputs.tag }}
+          if [ ! -x "$(command -v strip)" ]; then
+            sudo apt-get update && sudo apt-get install -y binutils --no-install-recommends
+          fi
+          strip bun
+          mv bun-profile bun-${{ inputs.tag }}-profile/bun-profile
+          mv bun bun-${{ inputs.tag }}/bun
+          if [ ! -x "$(command -v zip)" ]; then
+            sudo apt-get update && sudo apt-get install -y zip --no-install-recommends
+          fi
+          zip -r bun-${{ inputs.tag }}-profile.zip bun-${{ inputs.tag }}-profile
+          zip -r bun-${{ inputs.tag }}.zip bun-${{ inputs.tag }}
+
+  upload:
+    needs: [build]
+    name: Upload ${{ inputs.tag }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - id: upload
+        name: Upload ${{ inputs.tag }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ inputs.tag }}
+          path: ${{ runner.temp }}/release/bun-${{ inputs.tag }}.zip
+
+  upload-profile:
+    needs: [build]
+    name: Upload ${{ inputs.tag }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - id: upload-profile
+        name: Upload ${{ inputs.tag }}-profile
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ inputs.tag }}-profile
+          path: ${{ runner.temp }}/release/bun-${{ inputs.tag }}-profile.zip
+
+  upload-obj:
+    needs: [build]
+    name: Upload ${{ inputs.tag }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - id: upload-obj
+        name: Upload ${{ inputs.tag }}-obj
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ inputs.tag }}-obj
+          path: ${{ runner.temp }}/release/bun-obj
+
+  upload-deps:
+    needs: [build]
+    name: Upload ${{ inputs.tag }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - id: upload-deps
+        name: Upload ${{ inputs.tag }}-deps
+        uses: actions/upload-artifact@v3
+        with:
+          name: bun-${{ inputs.tag }}-deps
+          path: ${{ runner.temp }}/release/bun-dependencies
